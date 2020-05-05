@@ -701,6 +701,23 @@
             ]
           },
           {
+            "title": "Roach Data",
+            "items": [
+              {
+                "title": "Spring Boot with JDBC",
+                "urls": [
+                  "/${VERSION}/build-a-spring-app-with-cockroachdb-jdbc.html"
+                ]
+              },
+              {
+                "title": "Spring Boot with JPA",
+                "urls": [
+                  "/${VERSION}/build-a-spring-app-with-cockroachdb-jpa.html"
+                ]
+              }
+            ]
+          },
+          {
             "title": "Multi-Region",
             "items": [
               {
