@@ -31,19 +31,24 @@ The underlying reason for this is that the SQL language is "conversational" by d
 
 This means that there's no way for the server to "simply retry" the arbitrary SQL statements sent so far inside the transaction, because if there are different results for a given statement than there were earlier (likely due to the operations of other, concurrent transactions operating on the same data), the client needs to know so that it can decide how to handle that situation.
 
-## Retry write too old
+## TransactionRetryWithProtoRefreshError
+
+### Retry write too old
 
 ```
 TransactionRetryWithProtoRefreshError: RestartsWriteTooOld
 ```
 
-The `RETRY_WRITE_TOO_OLD` error occurs when a transaction _A_ tries to write to a row, but another transaction _B_ that was supposed to be serialized after _A_ (i.e., had been assigned a lower timestamp), has already written to that row, and has already committed.
+_Description_:
 
-This is a common error when you have too much contention in your workload.   The solution is to [add a retry loop to your application](error-handling-and-troubleshooting.html#transaction-retry-errors).
+The `RETRY_WRITE_TOO_OLD` error occurs when a transaction _A_ tries to write to a row, but another transaction _B_ that was supposed to be serialized after _A_ (i.e., had been assigned a lower timestamp), has already written to that row, and has already committed.  This is a common error when you have too much contention in your workload.
 
-For more information about the types and causes of contention, and how to mitigate them, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
+_Action_:
 
-## Retry serializable
+1. Retry transaction _A_ as described in [client-side retry handling](transactions.html#client-side-intervention).
+2. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
+
+### Retry serializable
 
 ```
 TransactionRetryWithProtoRefreshError: RestartsSerializable
@@ -57,7 +62,7 @@ The `RETRY_SERIALIZABLE` error occurs in the following scenarios:
 
 3. When a transaction _A_ is forced to refresh (change its timestamp) due to hitting the maximum closed timestamp interval (closed timestamps enable [Follower Reads](follower-reads.html#how-follower-reads-work)).  If this is the cause of the error, the solution is to increase the [`kv.closed_timestamp.target_duration` setting](settings.html) to a higher value.  Unfortunately, there is no indication from the `RETRY_SERIALIZATION` error code that closed timestamps are the issue.  Therefore, you may need to rule out cases 1 and 2 (or experiment with increasing the closed timestamp interval, if that is possible for your application).
 
-## Retry async write failure
+### Retry async write failure
 
 ```
 TransactionRetryWithProtoRefreshError: RestartsAsyncWriteFailure: ...
@@ -67,7 +72,7 @@ The `RETRY_ASYNC_WRITE_FAILURE` error occurs when some kind of problem with your
 
 Because this is due to a problem with your cluster, there is no solution from the application's point of view.  You must investigate the problems with your cluster.
 
-## Read within uncertainty interval
+### Read within uncertainty interval
 
 ```
 TransactionRetryWithProtoRefreshError: ReadWithinUncertaintyIntervalError: 
@@ -84,13 +89,86 @@ The solution is to do one of the following:
 3. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
 4. If you trust your clocks, you can try lowering the [maximum clock offset setting](cockroach-start.html#flags-max-offset).
 
-## Retry commit deadline exceeded
+### Retry commit deadline exceeded
 
 ```
 TransactionRetryWithProtoRefreshError: TransactionPushError: ...
 ```
 
-The `RETRY_COMMIT_DEADLINE_EXCEEDED` error ... XXX
+The `RETRY_COMMIT_DEADLINE_EXCEEDED` error means that the transaction timed out due to being pushed back in the transaction queue by other concurrent transactions.
+
+TODO: find out from Paul what users can do about this
+
+## TransactionAbortedError
+
+### Abort reason aborted record found
+
+The `ABORT_REASON_ABORTED_RECORD_FOUND` error is caused by a write-write conflict.  It means that another transaction _B_ encountered one of our transaction _A_'s write intents, and _B_ tried to push _A_'s timestamp.  This happens in one of the following cases:
+
+1. _B_ is a higher-priority transaction than _A_
+2. _B_ thinks that _A_'s transaction coordinator node is dead, because the coordinator node hasn't heartbeated the transaction record for a few seconds.  This case indicates some trouble with the cluster - usually overload.
+
+If you are not using high-priority transactions:
+
+- This error means your cluster has problems.  You are likely overloading it.
+- Investigate the source of the overload, and do something about it.  For more information, see [Node liveness issues](cluster-setup-troubleshooting.html#node-liveness-issues).
+
+If you are using high-priority transactions:
+
+1. Update your app to retry on serialization errors (where `SQLSTATE` is `40001`), as described in [client-side retry handling](transactions.html#client-side-intervention).
+2. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
+
+### Abort reason client reject
+
+The `ABORT_REASON_CLIENT_REJECT` error means that the client application is trying to use a transaction that has been aborted.  This is usually not due to any coding error on the part of the client application.  It is usually due to the same reasons as the [abort reason aborted record found](#abort-reason-aborted-record-found) error, namely:
+
+- Write-write conflict: Another high-priority transaction _B_ encountered a write intent by our transaction _A_, and tried to push _A_'s timestamp.
+- Cluster overload: _B_ thinks that _A_'s transaction coordinator node is dead, because the coordinator node hasn't heartbeated the transaction record for a few seconds.
+
+If you are not using high-priority transactions:
+
+- This error means your cluster has problems.  You are likely overloading it.
+- Investigate the source of the overload, and do something about it.  For more information, see [Node liveness issues](cluster-setup-troubleshooting.html#node-liveness-issues).
+
+If you are using high-priority transactions:
+
+1. Update your app to retry on serialization errors (where `SQLSTATE` is `40001`), as described in [client-side retry handling](transactions.html#client-side-intervention).
+2. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
+
+XXX: Does this section need to have approximately all of the same content as the section for `ABORT_REASON_ABORTED_RECORD_FOUND`?  Should we say this differently, somehow?
+
+### Abort reason pusher aborted
+
+The `ABORT_REASON_PUSHER_ABORTED` error can happen when a transaction _A_ is aborted by some other concurrent transaction _B_, probably due to a deadlock.  _A_ tried to push another transaction's timestamp, but while waiting for the push to succeed, it was aborted.
+
+If you are seeing this error:
+
+1. Update your app to retry on serialization errors (where `SQLSTATE` is `40001`), as described in [client-side retry handling](transactions.html#client-side-intervention).
+2. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
+
+XXX: is this one caused by contention?
+
+### Abort reason abort span
+
+_Description_:
+
+This transaction A tried to read from a range where it had previously laid down intents that have been cleaned up in the meantime, because A was aborted.
+
+_Action_:
+
+- Retry transaction _A_ as described in [client-side retry handling](transactions.html#client-side-intervention).
+
+XXX: is this one caused by contention?
+
+### Abort reason new lease prevents txn
+
+_Description_:
+
+The `ABORT_REASON_NEW_LEASE_PREVENTS_TXN` error occurs because the timestamp cache will not allow transaction _A_ to create a transaction record.  A new lease wipes the timestamp cache, so this could mean the leaseholder was moved and the duration of transaction _A_ was unlucky enough to happen across a lease acquisition.  In other words, leaseholders got shuffled out from underneath transaction _A_ (due to no fault of the client application or schema design), and now it has to be retried.
+
+_Action_:
+
+- Retry transaction _A_ as described in [client-side retry handling](transactions.html#client-side-intervention).
 
 ## See also
 
@@ -98,4 +176,3 @@ The `RETRY_COMMIT_DEADLINE_EXCEEDED` error ... XXX
 - [Transactions](transactions.html)
 - [Client-side retry handling](transactions.html#client-side-intervention)
 - [Architecture - Transaction Layer](architecture/transaction-layer.html)
-
