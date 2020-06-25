@@ -6,28 +6,30 @@ toc: true
 
 This page has a list of the transaction retry error codes emitted by CockroachDB.
 
-Errors with the `SQLSTATE` error code `40001` or string including `restart transaction` indicate that a transaction failed because it could not be placed into a serializable ordering among all of the currently-executing transactions.  This is almost always due to a conflict with another concurrent or recent transaction accessing the same data - also known as contention.  In cases of contention, the transaction needs to be retried by the client as described in [client-side intervention](#client-side-intervention).
+Errors with the `SQLSTATE` error code `40001`, along with error messages including the string `restart transaction`, indicate that a transaction failed because it could not be placed into a serializable ordering among all of the currently-executing transactions.  This is almost always due to a conflict with another concurrent or recent transaction accessing the same data - also known as contention.  In cases of contention, the transaction needs to be retried by the client as described in [client-side intervention](#client-side-intervention).
 
-In rare cases, transaction retry errors are not caused by contention, but by other system states.  This page attempts to gather a complete list of transaction retry error codes and describe:
+In rare cases, transaction retry errors are not caused by contention, but by other system states.  This page attempts to gather a complete list of transaction retry error codes, both those caused by 
+
+For each error code, we describe:
 
 - Why this error is happening
 - What to do about it
 
 {{site.data.alerts.callout_danger}}
 This page is meant to provide information about specific transaction retry error codes to make certain types of troubleshooting easier.  In _nearly all cases_, the correct action from a client application's perspective when these errors occur is:
-1. Check for the `SQLSTATE` error code `40001` and/or the error text including `restart transaction`, and retry the transaction as described in [client-side retry handling](transactions.html#client-side-intervention)
-2. If adding retry handling to your application doesn't help, the next step is to review your schema and data access patterns for causes of contention as described in [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
+1. Update your app to retry on serialization errors (where `SQLSTATE` is `40001`), as described in [client-side retry handling](transactions.html#client-side-intervention).
+2. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
 {{site.data.alerts.end}}
 
 ## Overview
 
 CockroachDB attempts to find a serializable ordering of all currently-executing transactions.
 
-Whenever possible, CockroachDB will try to auto-retry a transaction when it encounters a retry error, without ever bothering the client. It will only respond to the client with an error when it cannot resolve the error automatically without client-side intervention.
+Whenever possible, CockroachDB will auto-retry a transaction when it encounters a serialization error, without the client ever knowing. CockroachDB will only send such errors to the client when it cannot resolve the error automatically without client-side intervention.
 
 In other words, by the time these errors bubble up to the client, CockroachDB has already tried to resolve the problem internally, and could not.
 
-The underlying reason for this is that the SQL language is "conversational" by design. The client can send statements to the server during a transaction, receive some results, and then decide to issue other statements inside the same transaction based on the server's response.
+The common underlying reason for this is that the SQL language is "conversational" by design. The client can send statements to the server during a transaction, receive some results, and then decide to issue other statements inside the same transaction based on the server's response.
 
 This means that there's no way for the server to "simply retry" the arbitrary SQL statements sent so far inside the transaction, because if there are different results for a given statement than there were earlier (likely due to the operations of other, concurrent transactions operating on the same data), the client needs to know so that it can decide how to handle that situation.
 
@@ -99,9 +101,11 @@ The `RETRY_COMMIT_DEADLINE_EXCEEDED` error means that the transaction timed out 
 
 TODO: find out from Paul what users can do about this
 
-## TransactionAbortedError
-
 ### Abort reason aborted record found
+
+```
+TransactionRetryWithProtoRefreshError:TransactionAbortedError(ABORT_REASON_ABORTED_RECORD_FOUND)
+```
 
 The `ABORT_REASON_ABORTED_RECORD_FOUND` error is caused by a write-write conflict.  It means that another transaction _B_ encountered one of our transaction _A_'s write intents, and _B_ tried to push _A_'s timestamp.  This happens in one of the following cases:
 
@@ -119,6 +123,10 @@ If you are using high-priority transactions:
 2. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
 
 ### Abort reason client reject
+
+```
+TransactionRetryWithProtoRefreshError:TransactionAbortedError(ABORT_REASON_CLIENT_REJECT)
+```
 
 The `ABORT_REASON_CLIENT_REJECT` error means that the client application is trying to use a transaction that has been aborted.  This is usually not due to any coding error on the part of the client application.  It is usually due to the same reasons as the [abort reason aborted record found](#abort-reason-aborted-record-found) error, namely:
 
@@ -139,6 +147,10 @@ XXX: Does this section need to have approximately all of the same content as the
 
 ### Abort reason pusher aborted
 
+```
+TransactionRetryWithProtoRefreshError:TransactionAbortedError(ABORT_REASON_PUSHER_ABORTED)
+```
+
 The `ABORT_REASON_PUSHER_ABORTED` error can happen when a transaction _A_ is aborted by some other concurrent transaction _B_, probably due to a deadlock.  _A_ tried to push another transaction's timestamp, but while waiting for the push to succeed, it was aborted.
 
 If you are seeing this error:
@@ -149,6 +161,10 @@ If you are seeing this error:
 XXX: is this one caused by contention?
 
 ### Abort reason abort span
+
+```
+TransactionRetryWithProtoRefreshError:TransactionAbortedError(ABORT_REASON_ABORT_SPAN)
+```
 
 _Description_:
 
@@ -162,9 +178,27 @@ XXX: is this one caused by contention?
 
 ### Abort reason new lease prevents txn
 
+```
+TransactionRetryWithProtoRefreshError:TransactionAbortedError(ABORT_REASON_NEW_LEASE_PREVENTS_TXN)
+```
+
 _Description_:
 
 The `ABORT_REASON_NEW_LEASE_PREVENTS_TXN` error occurs because the timestamp cache will not allow transaction _A_ to create a transaction record.  A new lease wipes the timestamp cache, so this could mean the leaseholder was moved and the duration of transaction _A_ was unlucky enough to happen across a lease acquisition.  In other words, leaseholders got shuffled out from underneath transaction _A_ (due to no fault of the client application or schema design), and now it has to be retried.
+
+_Action_:
+
+- Retry transaction _A_ as described in [client-side retry handling](transactions.html#client-side-intervention).
+
+### Abort reason timestamp cache rejected
+
+```
+TransactionRetryWithProtoRefreshError:TransactionAbortedError(ABORT_REASON_TIMESTAMP_CACHE_REJECTED)
+```
+
+_Description_:
+
+The `ABORT_REASON_TIMESTAMP_CACHE_REJECTED` error occurs when the timestamp cache will not allow transaction _A_ to create a transaction record.  This can happen due to a [range merge](range-merges.html) happening in the background, or because the timestamp cache is an in-memory cache, and has outgrown its memory limit (about 64 MB).
 
 _Action_:
 
