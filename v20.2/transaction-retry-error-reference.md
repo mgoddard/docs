@@ -6,32 +6,32 @@ toc: true
 
 This page has a list of the transaction retry error codes emitted by CockroachDB.
 
-Errors with the `SQLSTATE` error code `40001`, along with error messages including the string `restart transaction`, indicate that a transaction failed because it could not be placed into a serializable ordering among all of the currently-executing transactions.  This is almost always due to a conflict with another concurrent or recent transaction accessing the same data - also known as contention.  In cases of contention, the transaction needs to be retried by the client as described in [client-side intervention](#client-side-intervention).
+Errors with the `SQLSTATE` error code `40001`, along with error messages including the string `restart transaction`, indicate that a transaction failed because it could not be placed into a serializable ordering among all of the currently-executing transactions.  This usually happens due to a conflict with another concurrent or recent transaction accessing the same data - also known as contention.  In cases of contention, the transaction needs to be retried by the client as described in [client-side intervention](#client-side-intervention).
 
-In rare cases, transaction retry errors are not caused by contention, but by other system states.  This page attempts to gather a complete list of transaction retry error codes, both those caused by 
+In some rare cases, transaction retry errors are caused by internal CockroachDB system states, and not contention.  This page attempts to gather a complete list of transaction retry error codes, both those caused by 
 
-For each error code, we describe:
+For each error code below, we describe:
 
 - Why this error is happening
 - What to do about it
 
-{{site.data.alerts.callout_danger}}
-This page is meant to provide information about specific transaction retry error codes to make certain types of troubleshooting easier.  In _nearly all cases_, the correct action from a client application's perspective when these errors occur is:
-1. Update your app to retry on serialization errors (where `SQLSTATE` is `40001`), as described in [client-side retry handling](transactions.html#client-side-intervention).
-2. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
+{{site.data.alerts.callout_info}}
+This page is meant to provide information about specific transaction retry error codes to make troubleshooting easier.  In most cases, the correct actions to take when these errors occur are:  
+1. Update your app to retry on serialization errors (where `SQLSTATE` is `40001`), as described in [client-side retry handling](transactions.html#client-side-intervention).  
+2. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).  
 {{site.data.alerts.end}}
 
 ## Overview
 
 CockroachDB attempts to find a serializable ordering of all currently-executing transactions.
 
-Whenever possible, CockroachDB will auto-retry a transaction when it encounters a serialization error, without the client ever knowing. CockroachDB will only send such errors to the client when it cannot resolve the error automatically without client-side intervention.
+Whenever possible, CockroachDB will auto-retry a transaction when it encounters a serialization error without the client ever knowing. CockroachDB will only send serialization errors to the client when it cannot resolve the error automatically without client-side intervention.
 
 In other words, by the time these errors bubble up to the client, CockroachDB has already tried to resolve the problem internally, and could not.
 
-The common underlying reason for this is that the SQL language is "conversational" by design. The client can send statements to the server during a transaction, receive some results, and then decide to issue other statements inside the same transaction based on the server's response.
+The biggest reason for this limitation is that the SQL language is "conversational" -- by design. In practice, this means that the client can send statements to the server during a transaction, receive some results, and then decide to issue other statements inside the same transaction based on the server's response.  By "client" we could mean [a Java application using JDBC](xxx), or an analyst typing directly to [a SQL shell](xxx).
 
-This means that there's no way for the server to "simply retry" the arbitrary SQL statements sent so far inside the transaction, because if there are different results for a given statement than there were earlier (likely due to the operations of other, concurrent transactions operating on the same data), the client needs to know so that it can decide how to handle that situation.
+This means that there's no way for the server to "simply retry" the arbitrary SQL statements sent so far inside the transaction, because if there are different results for a given statement than there were earlier (likely due to the operations of other, concurrently-executing transactions that may be operating on the same data), the client needs to know so that it can decide how to handle that situation.
 
 ## TransactionRetryWithProtoRefreshError
 
