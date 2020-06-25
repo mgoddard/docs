@@ -31,7 +31,11 @@ The underlying reason for this is that the SQL language is "conversational" by d
 
 This means that there's no way for the server to "simply retry" the arbitrary SQL statements sent so far inside the transaction, because if there are different results for a given statement than there were earlier (likely due to the operations of other, concurrent transactions operating on the same data), the client needs to know so that it can decide how to handle that situation.
 
-## RETRY_WRITE_TOO_OLD
+## Retry write too old
+
+```
+TransactionRetryWithProtoRefreshError: RestartsWriteTooOld
+```
 
 The `RETRY_WRITE_TOO_OLD` error occurs when a transaction _A_ tries to write to a row, but another transaction _B_ that was supposed to be serialized after _A_ (i.e., had been assigned a lower timestamp), has already written to that row, and has already committed.
 
@@ -39,9 +43,13 @@ This is a common error when you have too much contention in your workload.   The
 
 For more information about the types and causes of contention, and how to mitigate them, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
 
-## RETRY_SERIALIZATION
+## Retry serializable
 
-The `RETRY_SERIALIZATION` error occurs in the following scenarios:
+```
+TransactionRetryWithProtoRefreshError: RestartsSerializable
+```
+
+The `RETRY_SERIALIZABLE` error occurs in the following scenarios:
 
 1. When a transaction _A_ has its timestamp moved forward (also known as _A_ being "pushed") as CockroachDB attempts to find a serializable transaction ordering. Specifically, transaction _A_ tried to write a key that transaction _B_ had read.  _B_ had already committed, but it was supposed to be serialized after _A_ (i.e., _B_ had a lower timestamp than _A_).  CockroachDB will try to serialize _A_ after _B_ by changing _A_'s timestamp, but it cannot do that when another transaction has subsequently written to some of the keys that _A_ has read and returned to the client.  When that happens, the `RETRY_SERIALIZATION` error is signalled.  The solution for this is to [add a retry loop to your application](error-handling-and-troubleshooting.html#transaction-retry-errors).
 
@@ -49,34 +57,45 @@ The `RETRY_SERIALIZATION` error occurs in the following scenarios:
 
 3. When a transaction _A_ is forced to refresh (change its timestamp) due to hitting the maximum closed timestamp interval (closed timestamps enable [Follower Reads](follower-reads.html#how-follower-reads-work)).  If this is the cause of the error, the solution is to increase the [`kv.closed_timestamp.target_duration` setting](settings.html) to a higher value.  Unfortunately, there is no indication from the `RETRY_SERIALIZATION` error code that closed timestamps are the issue.  Therefore, you may need to rule out cases 1 and 2 (or experiment with increasing the closed timestamp interval, if that is possible for your application).
 
-## RETRY_ASYNC_WRITE_FAILURE
+## Retry async write failure
+
+```
+TransactionRetryWithProtoRefreshError: RestartsAsyncWriteFailure: ...
+```
 
 The `RETRY_ASYNC_WRITE_FAILURE` error occurs when some kind of problem with your cluster's operation occurs at the moment of a previous write in the transaction.  For example, this can happen if you have a networking partition that cuts off access to some nodes in your cluster.
 
 Because this is due to a problem with your cluster, there is no solution from the application's point of view.  You must investigate the problems with your cluster.
 
-## ABORT_REASON_ALREADY_COMMITTED_OR_ROLLED_BACK_POSSIBLE_REPLAY
+## Read within uncertainty interval
 
-The `ABORT_REASON_ALREADY_COMMITTED_OR_ROLLED_BACK_POSSIBLE_REPLAY` error is signalled when there are issues at the [Storage Layer](architecture/storage-layer.html) of CockroachDB.
+```
+TransactionRetryWithProtoRefreshError: ReadWithinUncertaintyIntervalError: 
+        read at time 1591009232.376925064,0 encountered previous write with future timestamp 1591009232.493830170,0 within uncertainty interval `t <= 1591009232.587671686,0`;
+        observed timestamps: [{1 1591009232.587671686,0} {5 1591009232.376925064,0}] 
+```
 
-This error should only appear wrapped in an `AmbiguousError`.  For more information about what ambiguous errors are and how to handle them, see [`AmbiguousError`](XXX).
+The `ReadWithinUncertaintyIntervalError` can occur during the first [`SELECT`](select-clause.html) statement in any transaction.  This behavior is non-deterministic: it depends on which node is the leaseholder of the underlying data range; it’s generally a sign of contention. Uncertainty errors are always possible with near-realtime reads under contention.
 
-## ReadWithinUncertaintyIntervalError
+The solution is to do one of the following:
 
-The `ReadWithinUncertaintyIntervalError` can occur during the first [`SELECT`](xxx) statement in any transaction.
-
-It depends on which node is the leaseholder of the underlying data range. It’s generally a sign of contention. Specifically, as noted below, uncertainty errors are always possible with near-realtime reads under contention.
-
-This behavior is non-deterministic - it depends on which node is the leader of the underlying data [range](xxx).  Uncertainty errors are always possible with near-realtime reads under contention. The solution is to do one of the following:
-
-1. Be prepared to retry on uncertainty (and other) errors, as described in [transaction retry errors](error-handling-and-troubleshooting.html#transaction-retry-errors).
+1. Be prepared to retry on uncertainty (and other) errors, as described in [client-side retry handling](transactions.html#client-side-intervention).
 2. Use historical reads with [`SELECT ... AS OF SYSTEM TIME`](as-of-system-time.html)
 3. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
-4. If you trust your clocks, you can lower the [maximum clock offset](xxx).
+4. If you trust your clocks, you can try lowering the [maximum clock offset setting](cockroach-start.html#flags-max-offset).
+
+## Retry commit deadline exceeded
+
+```
+TransactionRetryWithProtoRefreshError: TransactionPushError: ...
+```
+
+The `RETRY_COMMIT_DEADLINE_EXCEEDED` error ... XXX
 
 ## See also
 
 - [Common Errors](common-errors.html)
 - [Transactions](transactions.html)
+- [Client-side retry handling](transactions.html#client-side-intervention)
 - [Architecture - Transaction Layer](architecture/transaction-layer.html)
 
