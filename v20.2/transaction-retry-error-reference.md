@@ -6,11 +6,11 @@ toc: true
 
 This page has a list of the transaction retry error codes emitted by CockroachDB.
 
-Transaction retry errors use the `SQLSTATE` error code `40001`, and emit error messages including the string `restart transaction`.  This indicates that a transaction failed because it could not be placed into a [serializable ordering](demo-serializable.html) among all of the currently-executing transactions.  This usually happens due to a conflict with another concurrent or recent transaction accessing the same data -- also known as contention.  In cases of contention, the transaction needs to be retried by the client as described in [client-side retry handling](#client-side-intervention).
+Transaction retry errors use the `SQLSTATE` error code `40001`, and emit error messages including the string `restart transaction`.  These indicate that a transaction failed because it could not be placed into a [serializable ordering](demo-serializable.html) among all of the currently-executing transactions.  This usually happens due to a conflict with another concurrent or recent transaction accessing the same data -- also known as contention.  In cases of contention, the transaction needs to be retried by the client as described in [client-side retry handling](#client-side-intervention).
 
-In some rare cases, however, transaction retry errors are not caused by contention, but by the internal state of the CockroachDB cluster.  In such cases, other actions may need to be taken above and beyond client-side retries.
+In some rare cases, transaction retry errors are not caused by contention, but by the internal state of the CockroachDB cluster.  In such cases, other actions may need to be taken above and beyond client-side retries.
 
-This page attempts to gather a complete list of transaction retry error codes.  For each error code below, we describe:
+For each error code listed below, we describe:
 
 - Why the error is happening
 - What to do about it
@@ -18,20 +18,20 @@ This page attempts to gather a complete list of transaction retry error codes.  
 {{site.data.alerts.callout_info}}
 This page is meant to provide information about specific transaction retry error codes to make troubleshooting easier.  In most cases, the correct actions to take when these errors occur are:  
 1. Update your app to retry on serialization errors (where `SQLSTATE` is `40001`), as described in [client-side retry handling](transactions.html#client-side-intervention).  
-2. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).  
+2. Design your schema and queries to reduce contention.  For more information about how contention occurs and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).  
 {{site.data.alerts.end}}
 
 ## Overview
 
 CockroachDB attempts to find a [serializable ordering](demo-serializable.html) of all currently-executing transactions.
 
-Whenever possible, CockroachDB will [auto-retry a transaction](transactions.html#automatic-retries) without the client needing to get involved. CockroachDB will only send serialization errors to the client when it cannot resolve the error automatically without client-side intervention.
+Whenever possible, CockroachDB will [auto-retry a transaction internally](transactions.html#automatic-retries) without ever notifying the client. CockroachDB will only send serialization errors to the client when it cannot resolve the error automatically without client-side intervention.
 
 In other words, by the time these errors bubble up to the client, CockroachDB has already tried to handle the error internally, and could not.
 
-The biggest reason for this behavior is that the SQL language is "conversational" -- by design. The client can send statements to the server during a transaction, receive some results, and then decide to issue other statements inside the same transaction based on the server's response.  By "client" we could mean [a Java application using JDBC](build-a-java-app-with-cockroachdb.html), or an analyst typing [`BEGIN`](begin-transaction.html) directly to [a SQL shell](cockroach-sql.html).  In either case, the client could issue a `BEGIN`, wait an arbitrary amount of time, and issue additional statements.  Meanwhile, other transactions are being processed by the system, potentially accessing the same data.
+The biggest reason for this behavior is that the SQL language is "conversational" - by design. The client can send arbitrary statements to the server during a transaction, receive some results, and then decide to issue other arbitrary statements inside the same transaction based on the server's response.  By "client" we could mean [a Java application using JDBC](build-a-java-app-with-cockroachdb.html), or an analyst typing [`BEGIN`](begin-transaction.html) directly to [a SQL shell](cockroach-sql.html).  In either case, the client could issue a `BEGIN`, wait an arbitrary amount of time, and issue additional statements.  Meanwhile, other transactions are being processed by the system, potentially accessing thef same data.
 
-This means that there's no way for the server to "simply retry" the arbitrarily complex SQL statements sent so far inside the transaction, because if there are different results for any given statement than there were earlier (likely due to the operations of other, concurrently-executing transactions), CockroachDB must defer to the client so that it can decide how to handle that situation.
+This means that there is no way for the server to always retry the arbitrary statements sent so far inside an open transaction.  If there are different results for any given statement than there were at an earlier time in the open transaction's lifetime (likely due to the operations of other, concurrently-executing transactions), CockroachDB must defer to the client to decide how to handle that situation.
 
 ## Error reference
 
@@ -60,7 +60,7 @@ The `RETRY_WRITE_TOO_OLD` error occurs when a transaction _A_ tries to write to 
 _Action_:
 
 1. Retry transaction _A_ as described in [client-side retry handling](transactions.html#client-side-intervention).
-2. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
+2. Design your schema and queries to reduce contention.  For more information about how contention occurs and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
 
 ### Retry serializable
 
@@ -100,7 +100,7 @@ The solution is to do one of the following:
 
 1. Be prepared to retry on uncertainty (and other) errors, as described in [client-side retry handling](transactions.html#client-side-intervention).
 2. Use historical reads with [`SELECT ... AS OF SYSTEM TIME`](as-of-system-time.html)
-3. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
+3. Design your schema and queries to reduce contention.  For more information about how contention occurs and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
 4. If you trust your clocks, you can try lowering the [maximum clock offset setting](cockroach-start.html#flags-max-offset).
 
 ### Retry commit deadline exceeded
@@ -132,7 +132,7 @@ If you are not using high-priority transactions:
 If you are using high-priority transactions:
 
 1. Update your app to retry on serialization errors (where `SQLSTATE` is `40001`), as described in [client-side retry handling](transactions.html#client-side-intervention).
-2. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
+2. Design your schema and queries to reduce contention.  For more information about how contention occurs and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
 
 ### Abort reason client reject
 
@@ -153,9 +153,9 @@ If you are not using high-priority transactions:
 If you are using high-priority transactions:
 
 1. Update your app to retry on serialization errors (where `SQLSTATE` is `40001`), as described in [client-side retry handling](transactions.html#client-side-intervention).
-2. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
+2. Design your schema and queries to reduce contention.  For more information about how contention occurs and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
 
-XXX: Does this section need to have approximately all of the same content as the section for `ABORT_REASON_ABORTED_RECORD_FOUND`?  Should we say this differently, somehow?
+<strong><font color="red">FIXME</font></strong>: Does this section need to have approximately all of the same content as the section for `ABORT_REASON_ABORTED_RECORD_FOUND`?  Is there some nuance in this case that means we should say this differently?  With some different emphasis?
 
 ### Abort reason pusher aborted
 
@@ -168,9 +168,9 @@ The `ABORT_REASON_PUSHER_ABORTED` error can happen when a transaction _A_ is abo
 If you are seeing this error:
 
 1. Update your app to retry on serialization errors (where `SQLSTATE` is `40001`), as described in [client-side retry handling](transactions.html#client-side-intervention).
-2. Design your schema and queries to reduce contention.  For more information about contention and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
+2. Design your schema and queries to reduce contention.  For more information about how contention occurs and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
 
-XXX: is this one caused by contention?
+<strong><font color="red">FIXME</font></strong>: is this one caused by contention?
 
 ### Abort reason abort span
 
@@ -186,7 +186,7 @@ _Action_:
 
 - Retry transaction _A_ as described in [client-side retry handling](transactions.html#client-side-intervention).
 
-XXX: is this one caused by contention?
+<strong><font color="red">FIXME</font></strong>: is this one caused by contention?
 
 ### Abort reason new lease prevents txn
 
