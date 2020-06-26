@@ -6,13 +6,13 @@ toc: true
 
 This page has a list of the transaction retry error codes emitted by CockroachDB.
 
-Errors with the `SQLSTATE` error code `40001`, along with error messages including the string `restart transaction`, indicate that a transaction failed because it could not be placed into a serializable ordering among all of the currently-executing transactions.  This usually happens due to a conflict with another concurrent or recent transaction accessing the same data - also known as contention.  In cases of contention, the transaction needs to be retried by the client as described in [client-side intervention](#client-side-intervention).
+Transaction retry errors use the `SQLSTATE` error code `40001`, and emit error messages including the string `restart transaction`.  This indicates that a transaction failed because it could not be placed into a [serializable ordering](demo-serializable.html) among all of the currently-executing transactions.  This usually happens due to a conflict with another concurrent or recent transaction accessing the same data -- also known as contention.  In cases of contention, the transaction needs to be retried by the client as described in [client-side retry handling](#client-side-intervention).
 
-In some rare cases, transaction retry errors are caused by internal CockroachDB system states, and not contention.  This page attempts to gather a complete list of transaction retry error codes, both those caused by 
+In some rare cases, however, transaction retry errors are not caused by contention, but by the internal state of the CockroachDB cluster.  In such cases, other actions may need to be taken above and beyond client-side retries.
 
-For each error code below, we describe:
+This page attempts to gather a complete list of transaction retry error codes.  For each error code below, we describe:
 
-- Why this error is happening
+- Why the error is happening
 - What to do about it
 
 {{site.data.alerts.callout_info}}
@@ -23,17 +23,29 @@ This page is meant to provide information about specific transaction retry error
 
 ## Overview
 
-CockroachDB attempts to find a serializable ordering of all currently-executing transactions.
+CockroachDB attempts to find a [serializable ordering](demo-serializable.html) of all currently-executing transactions.
 
-Whenever possible, CockroachDB will auto-retry a transaction when it encounters a serialization error without the client ever knowing. CockroachDB will only send serialization errors to the client when it cannot resolve the error automatically without client-side intervention.
+Whenever possible, CockroachDB will [auto-retry a transaction](transactions.html#automatic-retries) without the client needing to get involved. CockroachDB will only send serialization errors to the client when it cannot resolve the error automatically without client-side intervention.
 
-In other words, by the time these errors bubble up to the client, CockroachDB has already tried to resolve the problem internally, and could not.
+In other words, by the time these errors bubble up to the client, CockroachDB has already tried to handle the error internally, and could not.
 
-The biggest reason for this limitation is that the SQL language is "conversational" -- by design. In practice, this means that the client can send statements to the server during a transaction, receive some results, and then decide to issue other statements inside the same transaction based on the server's response.  By "client" we could mean [a Java application using JDBC](xxx), or an analyst typing directly to [a SQL shell](xxx).
+The biggest reason for this behavior is that the SQL language is "conversational" -- by design. The client can send statements to the server during a transaction, receive some results, and then decide to issue other statements inside the same transaction based on the server's response.  By "client" we could mean [a Java application using JDBC](build-a-java-app-with-cockroachdb.html), or an analyst typing [`BEGIN`](begin-transaction.html) directly to [a SQL shell](cockroach-sql.html).  In either case, the client could issue a `BEGIN`, wait an arbitrary amount of time, and issue additional statements.  Meanwhile, other transactions are being processed by the system, potentially accessing the same data.
 
-This means that there's no way for the server to "simply retry" the arbitrary SQL statements sent so far inside the transaction, because if there are different results for a given statement than there were earlier (likely due to the operations of other, concurrently-executing transactions that may be operating on the same data), the client needs to know so that it can decide how to handle that situation.
+This means that there's no way for the server to "simply retry" the arbitrarily complex SQL statements sent so far inside the transaction, because if there are different results for any given statement than there were earlier (likely due to the operations of other, concurrently-executing transactions), CockroachDB must defer to the client so that it can decide how to handle that situation.
 
-## TransactionRetryWithProtoRefreshError
+## Error reference
+
+- [Retry write too old](#retry-write-too-old)
+- [Retry serializable](#retry-serializable)
+- [Retry async write failure](#retry-async-write-failure)
+- [Read within uncertainty interval](#read-within-uncertainty-interval)
+- [Retry commit deadline exceeded](#retry-commit-deadline-exceeded)
+- [Abort reason aborted record found](#abort-reason-aborted-record-found)
+- [Abort reason client reject](#abort-reason-client-reject)
+- [Abort reason pusher aborted](#abort-reason-pusher-aborted)
+- [Abort reason abort span](#abort-reason-abort-span)
+- [Abort reason new lease prevents txn](#abort-reason-new-lease-prevents-txn)
+- [Abort reason timestamp cache rejected](#abort-reason-timestamp-cache-rejected)
 
 ### Retry write too old
 
@@ -209,4 +221,5 @@ _Action_:
 - [Common Errors](common-errors.html)
 - [Transactions](transactions.html)
 - [Client-side retry handling](transactions.html#client-side-intervention)
+- [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention)
 - [Architecture - Transaction Layer](architecture/transaction-layer.html)
