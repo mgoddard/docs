@@ -6,32 +6,35 @@ toc: true
 
 This page has a list of the transaction retry error codes emitted by CockroachDB.
 
-Transaction retry errors use the `SQLSTATE` error code `40001`, and emit error messages including the string `restart transaction`.  These indicate that a transaction failed because it could not be placed into a [serializable ordering](demo-serializable.html) among all of the currently-executing transactions.  This usually happens due to a conflict with another concurrent or recent transaction accessing the same data -- also known as contention.  In cases of contention, the transaction needs to be retried by the client as described in [client-side retry handling](#client-side-intervention).
+Transaction retry errors, also known as serialization errors, use the `SQLSTATE` error code `40001`, and emit error messages with the string `restart transaction`.  These indicate that a transaction failed because it could not be placed into a [serializable ordering](demo-serializable.html) among all of the currently-executing transactions.  This usually happens due to a [transaction conflict](architecture/transaction-layer.html#transaction-conflicts) with another concurrent or recent transaction that is trying to access the same data.  This is also known as contention.  When these errors occur due to contention, the transaction needs to be retried by the client as described in [client-side retry handling](#client-side-intervention).
 
-In some rare cases, transaction retry errors are not caused by contention, but by the internal state of the CockroachDB cluster.  In such cases, other actions may need to be taken above and beyond client-side retries.
+In less common cases, transaction retry errors are not caused by contention, but by the internal state of the CockroachDB cluster.  For example, the cluster could be overloaded.  In such cases, other actions may need to be taken above and beyond client-side retries.
 
-For each error code listed below, we describe:
+See below for a complete list of retry error codes.  For each error code, we describe:
 
-- Why the error is happening
-- What to do about it
+- Why the error is happening.
+- What to do about it.
 
 {{site.data.alerts.callout_info}}
 This page is meant to provide information about specific transaction retry error codes to make troubleshooting easier.  In most cases, the correct actions to take when these errors occur are:  
 1. Update your app to retry on serialization errors (where `SQLSTATE` is `40001`), as described in [client-side retry handling](transactions.html#client-side-intervention).  
 2. Design your schema and queries to reduce contention.  For more information about how contention occurs and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).  
+Note that your application's retry logic does not need to distinguish between the different types of serialization errors. They are listed here for reference during advanced troubleshooting.
 {{site.data.alerts.end}}
 
 ## Overview
 
-CockroachDB attempts to find a [serializable ordering](demo-serializable.html) of all currently-executing transactions.
+CockroachDB always attempts to find a [serializable ordering](demo-serializable.html) among all of the currently-executing transactions.
 
-Whenever possible, CockroachDB will [auto-retry a transaction internally](transactions.html#automatic-retries) without ever notifying the client. CockroachDB will only send serialization errors to the client when it cannot resolve the error automatically without client-side intervention.
+Whenever possible, CockroachDB will [auto-retry a transaction internally](transactions.html#automatic-retries) without ever notifying the client. CockroachDB will only send a serialization error to the client when it cannot resolve the error automatically without client-side intervention.
 
-In other words, by the time these errors bubble up to the client, CockroachDB has already tried to handle the error internally, and could not.
+In other words, by the time a serialization error bubbles up to the client, CockroachDB has already tried to handle the error internally, and could not.
 
-The biggest reason for this behavior is that the SQL language is "conversational" - by design. The client can send arbitrary statements to the server during a transaction, receive some results, and then decide to issue other arbitrary statements inside the same transaction based on the server's response.  By "client" we could mean [a Java application using JDBC](build-a-java-app-with-cockroachdb.html), or an analyst typing [`BEGIN`](begin-transaction.html) directly to [a SQL shell](cockroach-sql.html).  In either case, the client could issue a `BEGIN`, wait an arbitrary amount of time, and issue additional statements.  Meanwhile, other transactions are being processed by the system, potentially accessing thef same data.
+The main reason why CockroachDB cannot auto-retry every serialization error without ever sending an error to the client is that the SQL language is "conversational" by design. The client can send arbitrary statements to the server during a transaction, receive some results, and then decide to issue other arbitrary statements inside the same transaction based on the server's response.  By "client" we could mean [a Java application using JDBC](build-a-java-app-with-cockroachdb.html), or an analyst typing [`BEGIN`](begin-transaction.html) directly to [a SQL shell](cockroach-sql.html).  In either case, the client is free to issue a `BEGIN`, wait an arbitrary amount of time, and issue additional statements.  Meanwhile, other transactions are being processed by the system, potentially accessing the same data.
 
-This means that there is no way for the server to always retry the arbitrary statements sent so far inside an open transaction.  If there are different results for any given statement than there were at an earlier time in the open transaction's lifetime (likely due to the operations of other, concurrently-executing transactions), CockroachDB must defer to the client to decide how to handle that situation.
+This means that there is no way for the server to always retry the arbitrary statements sent so far inside an open transaction.  If there are different results for any given statement than there were at an earlier point in the currently open transaction's lifetime (likely due to the operations of other, concurrently-executing transactions), CockroachDB must defer to the client to decide how to handle that situation.
+
+This is why we recommend [keeping transactions as small as possible](transactions.html#understanding-and-avoiding-transaction-contention).
 
 ## Error reference
 
@@ -94,24 +97,32 @@ TransactionRetryWithProtoRefreshError: ReadWithinUncertaintyIntervalError:
         observed timestamps: [{1 1591009232.587671686,0} {5 1591009232.376925064,0}] 
 ```
 
-The `ReadWithinUncertaintyIntervalError` can occur during the first [`SELECT`](select-clause.html) statement in any transaction.  This behavior is non-deterministic: it depends on which node is the leaseholder of the underlying data range; it’s generally a sign of contention. Uncertainty errors are always possible with near-realtime reads under contention.
+The `ReadWithinUncertaintyIntervalError` can occur when two transactions which start on different gateway nodes attempt to operate on the same data at close to the same time. The uncertainty comes from the fact that we cannot tell which one started first - the clocks on the two gateway nodes may not be perfectly in sync.
+
+For example, if the clock on node _A_ is ahead of the clock on node _B_, a transaction started on node _A_ may be able to commit a write with a timestamp that is still in the "future" from the perspective of node _B_. A later transaction that starts on node _B_ should be able to see the earlier write from node _A_, even if _B_'s clock has not caught up to _A_. The "read within uncertainty interval" occurs if we discover this situation in the middle of a transaction, when it is too late for the database to handle it automatically. When node _B_'s transaction retries, it will unambiguously occur after the transaction from node _A_.
+
+If this error does occur, it is most likely during the first [`SELECT`](select-clause.html) statement in any transaction.  This behavior is non-deterministic: it depends on which node is the leaseholder of the underlying data range; it’s generally a sign of contention. Uncertainty errors are always possible with near-realtime reads under contention.
 
 The solution is to do one of the following:
 
-1. Be prepared to retry on uncertainty (and other) errors, as described in [client-side retry handling](transactions.html#client-side-intervention).
+1. Be prepared to retry on uncertainty (and other) errors, as described in [client-side retry handling](transactions.html#client-side-intervention).  As long as the client-side retry protocol is followed, a transaction that has restarted once is much less likely to hit another uncertainty error.
 2. Use historical reads with [`SELECT ... AS OF SYSTEM TIME`](as-of-system-time.html)
 3. Design your schema and queries to reduce contention.  For more information about how contention occurs and how to avoid it, see [Understanding and avoiding transaction contention](performance-best-practices-overview.html#understanding-and-avoiding-transaction-contention).
-4. If you trust your clocks, you can try lowering the [maximum clock offset setting](cockroach-start.html#flags-max-offset).
+4. If you trust your clocks, you can try lowering the [`--max-offset` option to `cockroach start`](cockroach-start.html#flags), which provides an upper limit on how long a transaction can continue to restart due to uncertainty.
+
+{{site.data.alerts.callout_info}}
+Uncertainty errors are a form of transaction conflict. For more information about transaction conflicts, see [Transaction conflicts](architecture/transaction-layer.html#transaction-conflicts).
+{{site.data.alerts.end}}
 
 ### Retry commit deadline exceeded
 
 ```
-TransactionRetryWithProtoRefreshError: TransactionPushError: ...
+TransactionRetryWithProtoRefreshError: TransactionPushError: transaction deadline exceeded ...
 ```
 
 The `RETRY_COMMIT_DEADLINE_EXCEEDED` error means that the transaction timed out due to being pushed back in the transaction queue by other concurrent transactions.
 
-TODO: find out from Paul what users can do about this
+<strong><font color="red">FIXME</font></strong>: find out (from Paul?) what users can do about this
 
 ### Abort reason aborted record found
 

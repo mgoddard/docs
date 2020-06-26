@@ -145,7 +145,7 @@ Your application should include client-side retry handling when the statements a
 > COMMIT;
 ~~~
 
-To indicate that a transaction must be retried, CockroachDB signals an error with the code `40001` and an error message that begins with the string `"retry transaction"`.
+To indicate that a transaction must be retried, CockroachDB signals an error with the code `40001` and an error message that begins with the string `"retry transaction"`.  For a complete list of transaction retry error codes, see [Transaction retry error reference](transaction-retry-error-reference.html).
 
 To handle these types of errors you have the following options:
 
@@ -243,3 +243,4 @@ For more information about the relationship between these levels, see [this pape
 - [`SHOW`](show-vars.html)
 - [Retryable transaction example code in Java using JDBC](build-a-java-app-with-cockroachdb.html)
 - [CockroachDB Architecture: Transaction Layer](architecture/transaction-layer.html)
+- [Transaction retry error reference](transaction-retry-error-reference.html)
